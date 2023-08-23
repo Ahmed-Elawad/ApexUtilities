@@ -1,0 +1,142 @@
+global with sharing class getGroupIdsbyUser {
+    
+    public static RoleHierarchyUtil.MultiBaseTree roleTree = new RoleHierarchyUtil.MultiBaseTree();
+    
+    @InvocableMethod
+    public static List<Result> getUserGroupIds (List<Request> requestList) {
+        List<Result> resultList = new List<Result>();
+        Map<Id, User> users = new Map<Id, User>();
+        Map<Id, Integer> userResultPosition = new Map<Id, Integer>();
+        
+        Integer pos = 0;
+        for (Request req : requestList) {
+            users.put(req.UserId, null);
+            if (userResultPosition.get(req.UserId) == null) userResultPosition.put(req.UserId, pos);
+            pos++;
+            resultList.add(null); // extend the list to be as long as we need
+        }
+        
+        for (User userRecord : [SELECT Id, UserRoleId 
+                                FROM User
+                               WHERE ID IN :users.keySet()])
+        {
+            users.put(userRecord.Id, userRecord);
+        }
+        
+        
+        Set<String> rolesAboveUserRole;
+        Set<String> userOrGroupIdsToMatch = new Set<String>();
+        
+        Map<String, Set<String>> userAndRoles = new Map<String, Set<String>>();
+        Map<String, Set<String>> userAndRolesAbove = new Map<String, Set<String>>();
+        
+        Set<String> allHierarchyRolesToMatch = new Set<String>();
+        Set<String> allDirectRolesToMatch = new Set<String>();
+        
+        // get the roles that could be a match for the user
+        for (User userRecord : users.values()) {
+        	String userRoleId = userRecord.userRoleId;
+            Id userId = userRecord.Id;
+            rolesAboveUserRole = roleTree.getRolesAbove(userRoleId);
+            
+            userOrGroupIdsToMatch.add(userId); // user may be direct member so add the user ID
+            if (rolesAboveUserRole != null) userOrGroupIdsToMatch.addAll(rolesAboveUserRole); // user may be hierarchy member so add all the parent role Ids
+            
+            allHierarchyRolesToMatch.addAll(rolesAboveUserRole);
+            allDirectRolesToMatch.add(userRoleId);
+        }
+
+        // first get the user role groups for all the target users
+        List<Group> userRoleGroupIds = [SELECT ID, name, RelatedId, Related.Name, type 
+                                        FROM Group 
+                                        WHERE
+                                        (Type = 'Role' AND RelatedId = :allDirectRolesToMatch) OR
+                                        (Type = 'RoleAndSubordinates' AND RelatedId IN :allHierarchyRolesToMatch)]; // by role and by user id
+        
+        Map<String, Set<String>> userAndRoleGroupIds = new Map<String, Set<String>>();
+        for (group userRoleGroup : userRoleGroupIds) {
+            // add the group to the match list no matter what
+            userOrGroupIdsToMatch.add(userRoleGroup.Id);
+            
+            // we need to know which the group association to users so this section
+            // maps the userid to a set of role group ids
+            // if a direct role, just find the users where the role matches
+            for (User userRecord : users.values()) {
+                Set<String> userROleGroups = userAndRoleGroupIds.get(userRecord.Id) == null ? new Set<string>() : userAndRoleGroupIds.get(userRecord.Id);
+                rolesAboveUserRole = roleTree.getRolesAbove(userRecord.userRoleId);
+                
+                if (userRoleGroup.Type == 'Role') {
+                    if (userRecord.userRoleId != userRoleGroup.RelatedId) continue;
+                    userROleGroups.add(userRoleGroup.Id);
+                }
+                
+                if (userRoleGroup.Type == 'RoleAndSubordinates') {
+                    if (!rolesAboveUserRole.contains(userRoleGroup.RelatedId)) continue;    
+                    userROleGroups.add(userRoleGroup.Id);
+                }
+                
+                userAndRoleGroupIds.put(userRecord.Id, userROleGroups);
+            }
+        }
+        
+        // get all groupMembership records where userOrGroupId in userAndParentRole or userOrGroupId = userId
+        // would also like to get the groups where the user is a member where the group is part of another group
+        List<GroupMember> directMatchGroups = [Select Id, UserOrGroupId, GroupId, Group.Name 
+                                               FROM GroupMember
+                                               WHERE UserOrGroupId IN :userOrGroupIdsToMatch
+                                               AND group.type = 'Regular'];
+        
+        Set<String> groupIds = new Set<String>();
+        for (GroupMember memb : directMatchGroups) {
+            groupIds.add(memb.groupId);
+            // we need to attach these group IDS to the user
+            for (String userId : userAndRoleGroupIds.keySet()) {
+                Set<String> userGroupIds = userAndRoleGroupIds.get(userId) == null ? new Set<string>() : userAndRoleGroupIds.get(userId);
+                if (!userGroupIds.contains(memb.groupId)) userGroupIds.add(memb.groupId);
+                userAndRoleGroupIds.put(userId, userGroupIds);
+                System.debug('Adding group to list: ' + memb.groupId + ' - ' + memb.group.name);
+                Integer resultPosition = userResultPosition.get(userId);
+                Result userResult = resultList[resultPosition];
+                if (userResult == null) userResult = new Result();
+                if (!userResult.userGroupIds.contains(memb.groupId)) {
+                    userResult.userGroupIds.add(memb.groupId);
+                    resultList[resultPosition] = userResult;
+                }
+            }
+        }
+        
+        List<GroupMember> allSubGroups = [Select Id, UserOrGroupId, GroupId, Group.Name 
+                                          FROM GroupMember
+                                          WHERE UserOrGroupId IN :groupIds
+                                          AND group.type = 'Regular'];
+        
+        for (GroupMember grp : allSubGroups) {            
+            for (String userId : userAndRoleGroupIds.keySet()) {
+                Set<String> groupIdsExpectedForUser = userAndRoleGroupIds.get(userId);
+                if (groupIdsExpectedForUser?.contains(grp.UserOrGroupId)) {
+                    System.debug('Adding group to list: ' + grp.UserOrGroupId + ' - ' + grp.group.name);
+                    Integer resultPosition = userResultPosition.get(userId);
+                    Result userResult = resultList[resultPosition];
+                    
+                    if (userResult == null) userResult = new Result();
+                    if (!userResult.userGroupIds.contains(grp.groupId)) {
+                        userResult.userGroupIds.add(grp.groupId);
+                        resultList[resultPosition] = userResult;
+                    }
+                }
+            }
+        }
+        
+        return resultList;
+    }
+    
+    public class Request {
+        @InvocableVariable(label='User Id' description='Will return groups this user is a part of' required=true)
+        public String UserId;
+    }
+    
+    public class Result {
+        @InvocableVariable(label='Group Ids for the user' description='List of ')
+        public List<String> userGroupIds = new List<String>();
+    }
+}
