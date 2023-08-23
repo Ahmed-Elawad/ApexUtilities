@@ -1,0 +1,152 @@
+public class RoleHierarchyUtil {
+    
+    public class roleNode {
+        public UserRole role;
+        public string roleId;
+        public list<roleNode> childRoles = new List<roleNode>();
+        public roleNode parentRole;
+        public string Name;
+    }
+    
+    public class MultiBaseTree {
+        
+        public MultiBaseTree() {
+            // get all rolls and construct the role tree
+            for (UserRole role : [SELECT ID, Name, ParentRoleId From UserRole]) {
+                addRole(role);
+            }
+            checkAllUnparented();
+        }
+        
+        // can have many top level nodes
+        public List<roleNode> bases = new List<roleNode>();
+        public List<Id> baseNodeIds = new List<Id>();
+        public List<roleNode> unparentedRoles = new List<roleNode>();
+        public set<String> unparentedIds =  new set<String>();
+        
+        public void checkAllUnparented() {
+            Integer originalFosterSize = unparentedIds.size();
+            for (roleNode fosterNode : unparentedRoles) {
+                Boolean foundMatch = traverseTreeFindParent(bases, fosterNode);
+                if (foundMatch) unparentedIds.remove(fosterNode.role.Id);
+            }
+            // do this until we can't find anymore parents
+            if (unparentedIds.size() < originalFosterSize) checkAllUnparented(); 
+        }
+        
+        public Boolean addRole(UserRole role) {
+            roleNode node = new roleNode();
+            node.Name = role.Name;
+            node.role = role;
+            
+            node.roleId = role.Id;
+            
+            // is the role a base?
+            if (role.ParentRoleId == null) {
+                if (!baseNodeIds.contains(role.Id)) {
+                    bases.add(node);
+                    baseNodeIds.add(role.Id);
+                }
+                return true;
+            }
+            
+            // otherwise check if any of the nodes are it's parent
+            boolean assignedRelationship = traverseTreeFindParent(bases, node);
+           
+            if (!assignedRelationship && !unparentedIds.contains(role.Id)) {
+                unparentedIds.add(role.Id);
+                unparentedRoles.add(node);
+            }
+            
+            return assignedRelationship;
+        }
+        
+        public boolean traverseTreeFindParent(List<roleNode> currentLevel, roleNode currentNode) {
+            Boolean foundMatch = false;
+            for (roleNode node : currentLevel) {
+                if (foundMatch) return foundMatch;
+                
+                if (node.role.Id == currentNode.role.ParentRoleId) {
+                    node.childRoles.add(currentNode);
+                    currentNode.parentRole = node;
+                    return true;
+                }
+                
+                if (!node.childRoles.isEmpty()) {
+                    foundMatch = traverseTreeFindParent(node.childRoles, currentNode);
+                }
+            }
+            return foundMatch;
+        }
+        
+        public Boolean findTarget(List<roleNode> currentLevel, String matchValue, List<roleNode> ref) {
+            boolean found = false;
+            
+            for (roleNode node : currentLevel) {
+                if (!node.childRoles.isEmpty()) {
+                    found = findTarget(node.childRoles, matchValue, ref);
+                }
+                
+                if (node.roleId == matchValue || found) {
+                    ref.add(node);
+                    return true;
+                }
+            }
+            
+            return false;
+        }
+        
+        public Boolean findSpecificNode(List<roleNode> currentLevel, String matchValue, List<roleNode> ref) {
+            boolean found = false;
+            
+            for (roleNode node : currentLevel) {
+                if (!node.childRoles.isEmpty()) {
+                    found = findTarget(node.childRoles, matchValue, ref);
+                }
+                
+                if (node.roleId == matchValue) {
+                    ref.add(node);
+                    return true;
+                }
+            }
+            
+            return false;
+        }
+        
+        public void addALlChildren(List<roleNode> nodes, List<roleNode> refList) {
+            for (roleNode node : nodes) {
+                refList.add(node);
+                
+                if (!node.childRoles.isEmpty()) {
+                    addALlChildren(node.childRoles, refList);
+                }
+            }
+        }
+        
+        public set<String> getRolesBelow(Id userRoleId) {
+            List<roleNode> targetnode = new List<roleNode>();
+            findSpecificNode(bases, userRoleId, targetnode);
+            if (targetNode.isEmpty()) return null;
+            
+            if (!targetnode[0].childRoles.isEmpty()) {
+                addALlChildren(targetnode[0].childRoles, targetnode);
+            }
+            
+            set<String> matchIds = new Set<String>();
+            for (roleNode node : targetnode) {
+                matchIds.add(node.roleId);
+            }
+            return matchIds;
+        }
+        
+        public  set<String> getRolesAbove(Id userRoleId) {
+            List<roleNode> targetnode = new List<roleNode>();
+            findTarget(bases, userRoleId, targetnode);
+            set<String> matchIds = new Set<String>();
+            for (roleNode node : targetnode) {
+                matchIds.add(node.roleId);
+            }
+            return matchIds;
+        }
+    }
+}
