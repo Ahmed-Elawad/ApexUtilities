@@ -1,0 +1,197 @@
+global class getUserIdByGroup {
+
+    public static RoleHierarchyUtil.MultiBaseTree roleTree = new RoleHierarchyUtil.MultiBaseTree();
+    public static Map<String, Group> allGroups;
+    public static Set<String> allPossibleRolesToMatch;
+    public static Map<String, Set<String>> groupIdsAndtheirHierarchyRoleMembers;
+    public static Map<String, Set<String>> groupIdsAndtheirRoleMembers;
+    public static Map<String, Set<String>> hierarchyRolesAndTheirGroupIds;
+    public static Map<String, Set<String>> rolesAndTheirGroupIds;
+    public static Map<String, List<groupMember>> groupMembersByGroupId;
+    
+    @InvocableMethod
+    public static List<Result> getUserGroupIds (List<Request> requestList) {
+        List<Result> results = new List<Result>();
+        Set<String> allGroupIds = new Set<String>();
+        Map<String, Integer> groupIdResultPosition = new Map<String, Integer>();
+        
+        Map<String, List<String>> groupUserIds = new Map<String, List<String>>();
+        Integer pos = 0;
+        for (Request req : requestList) {
+            if (req.groupIds == null || req.groupIds.isEmpty()) continue;
+            
+            allGroupIds.AddAll(req.groupIds);
+            for (String groupId : req.groupIds) {
+                groupIdResultPosition.put(groupId, pos);
+            }
+            pos++;
+            results.add(new Result());
+        }
+        
+        set<String> groupsToSubQuery = new Set<String>();
+        
+        List<groupMember> allGroupMembers = new List<groupMember>(); 
+        groupMembersByGroupId = new Map<String, List<groupMember>>();
+        for (GroupMember memberRecord : [SELECT Id, userOrGroupId, GroupId, group.Type, group.related.Type
+                                         FROM GroupMember
+                                         WHERE group.type != 'Queue']) 
+        {
+            allGroupMembers.add(memberRecord);
+            List<GroupMember> groupMembersForGroup = groupMembersByGroupId.get(memberRecord.groupId);
+            if (null == groupMembersForGroup) {
+                groupMembersForGroup = new List<GroupMember>();
+                groupMembersByGroupId.put(memberRecord.groupId, groupMembersForGroup);
+            }
+            groupMembersForGroup.add(memberRecord);
+        }
+        
+        allGroups = new Map<String, Group>();
+        for (GRoup singleGroup : [SELECT Id, Name, RelatedId, type
+                                FROM Group
+                                WHERE type != 'Queue'])
+        {
+            allGroups.put(singleGroup.Id, singleGroup);
+        }
+        
+        groupIdsAndtheirRoleMembers = new Map<String, Set<String>>();
+        groupIdsAndtheirHierarchyRoleMembers = new Map<String, Set<String>>();
+        allPossibleRolesToMatch = new Set<String>();
+        hierarchyRolesAndTheirGroupIds = new Map<String, Set<String>>();
+        rolesAndTheirGroupIds = new Map<String, Set<String>>();
+        for (Request req : requestList) {
+            for (String groupId : req.groupIds) {
+                
+                Integer resultPositionForGroup = groupIdResultPosition.get(groupId);
+                Result groupResult = results[resultPositionForGroup];
+                if (groupResult == null) {
+                    groupResult = new Result();
+                    results[resultPositionForGroup] = groupResult;
+                }
+                List<String> userIdsForGRoup = groupResult.userIdsForGroup;
+                
+                List<groupMember> membersForGroup = groupMembersByGroupId.get(groupId);
+                boolean isNull = membersForGroup == null;
+                if (membersForGroup == null) continue;
+                recurseGroupMembers(membersForGroup, groupId, groupResult);
+            }
+        }
+        
+        for (User userRecord : [select Id, UserRoleId from User
+                                WHERE userRoleId IN :allPossibleRolesToMatch
+                                AND isACtive = true]) 
+        {
+            // get the set of group ids where the users role was added through hierarchy
+            // allPossibleRolesToMatch : {00EDR000001ClRz2AK, 00EDR000001ClS42AK, 00EDR000001ClS92AK} => parent, child, granchild
+            Set<String> hierarchyRoleTargets = hierarchyRolesAndTheirGroupIds.get(userRecord.userRoleId);
+            
+            Set<String> directRoleTargets = rolesAndTheirGroupIds.get(userRecord.userRoleId);
+            if (hierarchyRoleTargets != null) {
+                for (String groupid : hierarchyRoleTargets) {
+                    Integer resultPositionForGroup = groupIdResultPosition.get(groupId);
+                    Result groupResult = results[resultPositionForGroup];
+                    List<String> userIdsForGRoup = groupResult.userIdsForGroup;
+                    if (!userIdsForGRoup.contains(userRecord.Id)) {
+                        userIdsForGRoup.add(userRecord.Id);
+                    }
+                }
+                
+            }
+            
+            if (directRoleTargets != null) {
+                SYSTEM.debug('directRoleTargets(AKA GROUPS): '+ directRoleTargets);
+                for (String groupid : directRoleTargets) {
+                    Integer resultPositionForGroup = groupIdResultPosition.get(groupId);
+                    Result groupResult = results[resultPositionForGroup];
+                    List<String> userIdsForGRoup = groupResult.userIdsForGroup;
+                    if (!userIdsForGRoup.contains(userRecord.Id)) {
+                        userIdsForGRoup.add(userRecord.Id);
+                    }
+                }
+            }
+        }
+
+        System.debug(results.size());   
+        return  results;
+    }
+    
+    public static void recurseGroupMembers(List<GroupMember> membersForGroup, String groupId, Result groupResult) {
+        List<String> userIdsForGRoup = groupResult.userIdsForGroup;
+        for (groupMember singleMember : membersForGroup) {
+            String userOrGroupId = singleMember.UserOrGroupId;
+            if (userOrGroupId.startsWith('005') && !userIdsForGRoup.contains(userOrGroupId)) {
+                userIdsForGRoup.add(userOrGroupId);
+                continue;
+            }
+
+            // get the real group
+            Group singleGroup = allGroups.get(singleMember.UserOrGroupId);
+            System.debug('SHOULD BE USER ROLE GROUP');
+            SYSTEm.debug(singleGroup);
+            if (singleGroup?.Type == 'Role') {
+                Set<String> rolesInGroup = groupIdsAndtheirRoleMembers.get(singleGroup.Id);
+                Set<String> groupIdsForRole = rolesAndTheirGroupIds.get(singleGroup.relatedId);
+                if (rolesInGroup == null) {
+                    groupIdsAndtheirRoleMembers.put(singleGroup.Id, new set<String>());
+                    rolesInGroup = groupIdsAndtheirRoleMembers.get(singleGroup.Id);
+                }
+                if (groupIdsForRole == null) {
+                    rolesAndTheirGroupIds.put(singleGroup.relatedId, new SEt<String>());
+                    groupIdsForRole = rolesAndTheirGroupIds.get(singleGroup.relatedId);
+                }
+                
+                rolesInGroup.add(singleGroup.RelatedId);
+                groupIdsForRole.add(singleMember.GroupId);
+                System.debug('ADDED ROLE FOR USER: ' + groupIdsForRole);
+                allPossibleRolesToMatch.add(singleGroup.RelatedId);
+            }
+            
+            if (singleGroup?.Type == 'RoleAndSubordinates') { 
+                Set<String> rolesInGroup = groupIdsAndtheirHierarchyRoleMembers.get(singleGroup.Id);
+                Set<String> groupIdsASsignedToRole = hierarchyRolesAndTheirGroupIds.get(singleGroup.relatedId); // map by the role
+                
+                if (rolesInGroup == null) {
+                    groupIdsAndtheirHierarchyRoleMembers.put(singleGroup.Id, new set<String>());
+                    rolesInGroup = groupIdsAndtheirHierarchyRoleMembers.get(singleGroup.Id);
+                }
+                
+                if (groupIdsASsignedToRole == null) {
+                    // add the role ID set to the mapping by role ID
+                    hierarchyRolesAndTheirGroupIds.put(singleGroup.relatedId, new Set<String>());
+                    // set the refernce list to the set just added for the role ID: role = relatedId
+                    groupIdsASsignedToRole = hierarchyRolesAndTheirGroupIds.get(singleGroup.relatedId);
+                }
+                
+                // get the roles below the relatedId value
+                Set<String> rolesBelow = roleTree.getRolesBelow(singleGroup.RelatedId);
+                rolesInGroup.add(singleGroup.RelatedId);
+                rolesInGRoup.addAll(rolesBelow);
+                groupIdsASsignedToRole.add(singleMember.GroupId);
+                for (String role : rolesBelow) {
+                    hierarchyRolesAndTheirGroupIds.put(role, groupIdsASsignedToRole);
+                }
+                allPossibleRolesToMatch.addAll(rolesBelow);
+            }
+            
+            
+            if (singleGroup?.Type == 'Regular') { 
+                List<GroupMember> grouPMembersForGroup = groupMembersByGroupId.get(singleMember.UserOrGroupId);
+                
+                // recurse on these group members
+                if (grouPMembersForGroup != null) {
+                    recurseGroupMembers(grouPMembersForGroup, singleMember.UserOrGroupId, groupResult);
+                }
+            }
+        }
+    }
+    
+    public class Request {
+        @InvocableVariable(label='User Id' description='Will return groups this user is a part of' required=true)
+        public List<String> groupIds;
+    }
+    
+    public class Result {
+        @InvocableVariable(label='Group Ids for the user' description='List of ')
+        public List<String> userIdsForGroup = new List<String>();
+    }
+    
+}
