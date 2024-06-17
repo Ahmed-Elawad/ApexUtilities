@@ -1,7 +1,6 @@
 import { LightningElement, wire, track } from 'lwc';
-import { getRecord, getFieldValue } from 'lightning/uiRecordApi';
+import { getListUi } from 'lightning/uiListApi';
 import { NavigationMixin } from 'lightning/navigation';
-import getOpportunities from '@salesforce/apex/OpportunityController.getOpportunities';
 
 export default class OpportunityList extends NavigationMixin(LightningElement) {
     @track columns = [
@@ -15,17 +14,27 @@ export default class OpportunityList extends NavigationMixin(LightningElement) {
     ];
 
     @track opportunities = [];
+    @track error;
 
-    connectedCallback() {
-        getOpportunities()
-            .then(result => {
-                this.opportunities = result.map(row => {
-                    return {...row, DiscoveryCompleted: false } // Assuming 'Initial Discovery' flow status logic added later
-                });
-            })
-            .catch(error => {
-                this.error = error;
-            });
+    // Wire service to fetch opportunities list
+    @wire(getListUi, {
+        objectApiName: 'Opportunity',
+        listViewApiName: 'AllOpportunities' // Adjust this API name as per your actual list view
+    })
+    wiredOpportunities({ error, data }) {
+        if (data) {
+            this.opportunities = data.records.records.map(record => ({
+                Id: record.id,
+                Name: record.fields.Name.value,
+                StageName: record.fields.StageName.value,
+                Auto_Close_Date__c: record.fields.Auto_Close_Date__c.value,
+                ScheduledPresentation: record.fields.ScheduledPresentation.value, // Adjust this based on actual API field names
+                DiscoveryCompleted: false // This can be adjusted as per your logic later
+            }));
+        } else if (error) {
+            this.error = error;
+            console.error('Error fetching opportunities:', error);
+        }
     }
 
     handleRowAction(event) {
