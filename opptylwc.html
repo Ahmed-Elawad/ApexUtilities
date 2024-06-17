@@ -1,0 +1,10 @@
+<template>
+    <lightning-card title="Opportunities with Open Activities" icon-name="standard:opportunity">
+        <lightning-datatable
+            key-field="Id"
+            data={opportunities}
+            columns={columns}
+            onrowselection={handleRowAction}>
+        </lightning-datatable>
+    </lightning-card>
+</template>
