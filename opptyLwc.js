@@ -1,10 +1,10 @@
 import { LightningElement, wire, track } from 'lwc';
-import { getListUi } from 'lightning/uiListApi';
+import { graphql } from '@salesforce/lwc-graphql';
 import { NavigationMixin } from 'lightning/navigation';
 
 export default class OpportunityList extends NavigationMixin(LightningElement) {
     @track columns = [
-        { label: 'Opportunity Name', fieldName: 'Name', type: 'button', 
+        { label: 'Opportunity Name', fieldName: 'Name', type: 'button',
           typeAttributes: { label: { fieldName: 'Name' }, variant: 'base' }},
         { label: 'Stage', fieldName: 'StageName', type: 'text' },
         { label: 'Auto Close Date', fieldName: 'Auto_Close_Date__c', type: 'date' },
@@ -16,25 +16,41 @@ export default class OpportunityList extends NavigationMixin(LightningElement) {
     @track opportunities = [];
     @track error;
 
-    // Wire service to fetch opportunities list
-    @wire(getListUi, {
-        objectApiName: 'Opportunity',
-        listViewApiName: 'AllOpportunities' // Adjust this API name as per your actual list view
-    })
-    wiredOpportunities({ error, data }) {
-        if (data) {
-            this.opportunities = data.records.records.map(record => ({
-                Id: record.id,
-                Name: record.fields.Name.value,
-                StageName: record.fields.StageName.value,
-                Auto_Close_Date__c: record.fields.Auto_Close_Date__c.value,
-                ScheduledPresentation: record.fields.ScheduledPresentation.value, // Adjust this based on actual API field names
-                DiscoveryCompleted: false // This can be adjusted as per your logic later
-            }));
-        } else if (error) {
+    connectedCallback() {
+        this.loadOpportunities();
+    }
+
+    loadOpportunities() {
+        const query = `
+        {
+            opportunities(filters: {
+                AND: [
+                    { CloseDate: { LESS_THAN_OR_EQUAL: "NEXT_N_DAYS:7" } },
+                    { CloseDate: { GREATER_THAN_OR_EQUAL: "TODAY" } }
+                ]
+            }) {
+                records {
+                    Name
+                    StageName
+                    Auto_Close_Date__c
+                    ScheduledPresentation: Events(fields: ["ScheduledDate"], filters: { Type: { EQUALS: "Presentation initial" } })
+                }
+            }
+        }`;
+        
+        graphql(query)
+        .then(result => {
+            this.opportunities = result.data.opportunities.records.map(record => {
+                return {
+                    ...record,
+                    DiscoveryCompleted: false // Placeholder until logic added
+                };
+            });
+        })
+        .catch(error => {
             this.error = error;
-            console.error('Error fetching opportunities:', error);
-        }
+            console.error('GraphQL query error:', error);
+        });
     }
 
     handleRowAction(event) {
