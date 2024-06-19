@@ -1,12 +1,13 @@
-import { LightningElement, wire, track } from 'lwc';
-import { getListUi } from 'lightning/uiListApi';
+import { LightningElement, track, wire } from 'lwc';
 import { NavigationMixin } from 'lightning/navigation';
-import Id from "@salesforce/user/Id";
-import { gql, graphql } from "lightning/uiGraphQLApi";
+import { gql, graphql } from 'lightning/uiGraphQLApi';
+import userId from '@salesforce/user/Id';
 
+export default class ManageIEUPOpportunities extends NavigationMixin(LightningElement) {
+    @track opportunities = [];
+    @track error;
+    userId = userId;
 
-export default class ManageIEUPOpportunities extends LightningElement {
-    userId = Id;
     @track columns = [
         { label: 'Opportunity Name', fieldName: 'Name', type: 'button', 
           typeAttributes: { label: { fieldName: 'Name' }, variant: 'base' }},
@@ -16,53 +17,39 @@ export default class ManageIEUPOpportunities extends LightningElement {
         { label: 'Initial Discovery Completed', fieldName: 'DiscoveryCompleted', type: 'boolean', editable: false },
         { label: 'Launch Flow', type: 'button', typeAttributes: { label: 'Launch Flow', name: 'launch_flow', variant: 'brand' }}
     ];
-    connectedCallback() {
-        console.log('here')
-        // this.loadOpportunities()
-    }
 
-    @track opportunities = [];
-    @track error;
     @wire(graphql, {
         query: gql`
-          query IeupOpporunity() {
-            uiapi {
-                query {
-                Opportunity ( where: {
-                    and: [
-                        Initial_Presentation_outcome__c {eq: "Pending" }
-                    ]
-                }) {
-                  edges {
-                    node {
-                      Id
-                      Name {
-                        value
-                      }
-                    }
-                  }
+          query GetOpportunities($ownerId: String) {
+            Opportunity (filter: {OwnerId: {_eq: $ownerId}, Initial_Presentation_outcome__c: {_eq: "Pending"}}) {
+              edges {
+                node {
+                  Id
+                  Name
+                  StageName
+                  Auto_Close_Date__c
+                  ScheduledPresentation
+                  DiscoveryCompleted
                 }
               }
             }
-        }`,
-        variables: "$variables"
-      })
-      graphqlQueryResult({ data, errors }) {
-        console.log('here')
-        if (data) {
-            console.log(JSON.stringify(data));
-            debugger;
+          }
+        `,
+        variables: {
+            ownerId: this.userId
         }
-      }
-    
-      get variables() {
-        return {
-            ownerId : this.userId,
-        };
-      }
+    })
+    wiredOpportunities({ error, data }) {
+        if (data) {
+            this.opportunities = data.Opportunity.edges.map(edge => edge.node);
+            this.error = undefined;
+        } else if (error) {
+            this.error = error;
+            console.error('Error fetching opportunities with GraphQL:', error);
+        }
+    }
 
     handleRowAction(event) {
-        debugger;
         const actionName = event.detail.action.name;
         const row = event.detail.row;
         switch (actionName) {
@@ -75,8 +62,6 @@ export default class ManageIEUPOpportunities extends LightningElement {
     }
 
     launchFlow(row) {
-        debugger;
-        // Navigate to Flow
         this[NavigationMixin.Navigate]({
             type: 'standard__component',
             attributes: {
@@ -90,8 +75,6 @@ export default class ManageIEUPOpportunities extends LightningElement {
     }
 
     navigateToRecordPage(recordId) {
-        debugger;
-        // Navigate to Record Page
         this[NavigationMixin.Navigate]({
             type: 'standard__recordPage',
             attributes: {
@@ -101,4 +84,3 @@ export default class ManageIEUPOpportunities extends LightningElement {
         });
     }
 }
-
